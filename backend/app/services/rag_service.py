@@ -8,6 +8,9 @@ class RAGService:
     """
     End-to-end Retrieval-Augmented Generation pipeline.
 
+    Services are initialized lazily so FastAPI can start
+    without immediately loading all ML models into memory.
+
     Query
       ↓
     User-scoped Hybrid Search
@@ -39,59 +42,163 @@ class RAGService:
             "Initializing RAG service..."
         )
 
-        # =====================================================
-        # Embedding Service
-        # =====================================================
+        self.collection_name = (
+            collection_name
+        )
+
+        # -----------------------------------------------------
+        # Lazy-loaded services
+        # -----------------------------------------------------
+
+        self.embedding_service = None
+        self.hybrid_search = None
+        self.reranker = None
+        self.llm = None
 
         print(
-            "Loading embedding service..."
+            "RAG service created."
         )
-
-        self.embedding_service = (
-            EmbeddingService()
-        )
-
-        # =====================================================
-        # Hybrid Search
-        # =====================================================
 
         print(
-            "Initializing hybrid search..."
+            "ML models will be loaded lazily "
+            "when required."
         )
 
-        self.hybrid_search = (
-            HybridSearchService(
-                collection_name=collection_name,
-                embedding_service=(
-                    self.embedding_service
-                ),
+    # =========================================================
+    # Initialize Retrieval Services
+    # =========================================================
+
+    def _initialize_retrieval(self):
+        """
+        Initialize embedding + hybrid search services.
+
+        This loads the BGE-M3 embedding model.
+        """
+
+        if (
+            self.embedding_service is not None
+            and self.hybrid_search is not None
+        ):
+            return
+
+        print("=" * 60)
+        print(
+            "Loading retrieval components..."
+        )
+        print("=" * 60)
+
+        # -----------------------------------------------------
+        # Embedding service
+        # -----------------------------------------------------
+
+        if self.embedding_service is None:
+
+            print(
+                "Loading embedding service..."
             )
+
+            self.embedding_service = (
+                EmbeddingService()
+            )
+
+        # -----------------------------------------------------
+        # Hybrid search
+        # -----------------------------------------------------
+
+        if self.hybrid_search is None:
+
+            print(
+                "Initializing hybrid search..."
+            )
+
+            self.hybrid_search = (
+                HybridSearchService(
+                    collection_name=(
+                        self.collection_name
+                    ),
+                    embedding_service=(
+                        self.embedding_service
+                    ),
+                )
+            )
+
+        print(
+            "Retrieval components ready."
         )
 
-        # =====================================================
-        # Reranker
-        # =====================================================
+    # =========================================================
+    # Initialize Reranker
+    # =========================================================
 
+    def _initialize_reranker(self):
+        """
+        Initialize the BGE reranker.
+        """
+
+        if self.reranker is not None:
+            return
+
+        print("=" * 60)
         print(
             "Loading reranker..."
         )
+        print("=" * 60)
 
         self.reranker = (
             RerankerService()
         )
 
-        # =====================================================
-        # Local LLM
-        # =====================================================
+        print(
+            "Reranker ready."
+        )
 
+    # =========================================================
+    # Initialize LLM
+    # =========================================================
+
+    def _initialize_llm(self):
+        """
+        Initialize the local Qwen LLM.
+        """
+
+        if self.llm is not None:
+            return
+
+        print("=" * 60)
         print(
             "Loading local LLM..."
         )
+        print("=" * 60)
 
-        self.llm = LLMService()
+        self.llm = (
+            LLMService()
+        )
 
         print(
-            "RAG service initialized successfully."
+            "Local LLM ready."
+        )
+
+    # =========================================================
+    # Initialize Complete Pipeline
+    # =========================================================
+
+    def initialize(self):
+        """
+        Explicitly initialize the complete RAG pipeline.
+
+        This method is available if the application needs
+        all services loaded before processing a request.
+
+        Normally the individual components are initialized
+        lazily by ask().
+        """
+
+        self._initialize_retrieval()
+        self._initialize_reranker()
+        self._initialize_llm()
+
+        print(
+            "RAG service fully initialized."
         )
 
     # =========================================================
@@ -210,9 +317,6 @@ ANSWER:
             ) >= threshold
         ]
 
-        # Always keep the best result if retrieval returned
-        # something, even if it is below the threshold.
-
         if not filtered:
             filtered = [
                 documents[0]
@@ -285,35 +389,7 @@ ANSWER:
         """
         Execute the complete RAG pipeline.
 
-        Parameters
-        ----------
-        query:
-            User's question.
-
-        user_id:
-            Authenticated user's identity.
-
-            REQUIRED.
-
-            All retrieval is restricted to this user.
-
-        document_id:
-            Optional document restriction.
-
-            If supplied, retrieval is restricted to that
-            document AND the authenticated user.
-
-        retrieval_limit:
-            Number of hybrid retrieval candidates.
-
-        rerank_limit:
-            Number of candidates passed to the reranker.
-
-        relevance_threshold:
-            Minimum reranker score.
-
-        max_context_documents:
-            Maximum number of documents/chunks used as context.
+        All services are loaded only when needed.
         """
 
         # =====================================================
@@ -363,7 +439,13 @@ ANSWER:
             )
 
         # =====================================================
-        # 1. User-scoped Hybrid Retrieval
+        # 1. Initialize Retrieval
+        # =====================================================
+
+        self._initialize_retrieval()
+
+        # =====================================================
+        # 2. User-scoped Hybrid Retrieval
         # =====================================================
 
         print(
@@ -426,7 +508,13 @@ ANSWER:
             }
 
         # =====================================================
-        # 2. Reranking
+        # 3. Initialize Reranker
+        # =====================================================
+
+        self._initialize_reranker()
+
+        # =====================================================
+        # 4. Reranking
         # =====================================================
 
         print(
@@ -449,7 +537,7 @@ ANSWER:
         )
 
         # =====================================================
-        # Defensive ownership check after reranking
+        # Defensive ownership check
         # =====================================================
 
         reranked_results = [
@@ -461,7 +549,7 @@ ANSWER:
         ]
 
         # =====================================================
-        # 3. Relevance Filtering
+        # 5. Relevance Filtering
         # =====================================================
 
         filtered_results = (
@@ -481,7 +569,7 @@ ANSWER:
         )
 
         # =====================================================
-        # 4. Final Ownership Check
+        # Final Ownership Check
         # =====================================================
 
         filtered_results = [
@@ -493,7 +581,7 @@ ANSWER:
         ]
 
         # =====================================================
-        # 5. No Relevant Context
+        # No Relevant Context
         # =====================================================
 
         if not filtered_results:
@@ -522,7 +610,7 @@ ANSWER:
         )
 
         # =====================================================
-        # 7. Build Grounded Prompt
+        # 7. Build Prompt
         # =====================================================
 
         prompt = self.build_prompt(
@@ -531,7 +619,13 @@ ANSWER:
         )
 
         # =====================================================
-        # 8. Generate Answer
+        # 8. Initialize LLM
+        # =====================================================
+
+        self._initialize_llm()
+
+        # =====================================================
+        # 9. Generate Answer
         # =====================================================
 
         print(
@@ -544,7 +638,7 @@ ANSWER:
         )
 
         # =====================================================
-        # 9. Build Sources
+        # 10. Sources
         # =====================================================
 
         sources = self.build_sources(
@@ -552,7 +646,7 @@ ANSWER:
         )
 
         # =====================================================
-        # 10. Return Complete Result
+        # 11. Return
         # =====================================================
 
         return {
