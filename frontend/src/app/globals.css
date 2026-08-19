@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+:root {
+  --background: #080c1c;
+  --foreground: #f5f7ff;
+
+  --card: #11172d;
+  --card-foreground: #f5f7ff;
+
+  --primary: #5546e8;
+  --primary-hover: #6c63ff;
+  --primary-foreground: #ffffff;
+
+  --secondary: #0d1226;
+  --secondary-foreground: #f5f7ff;
+
+  --muted: #11172d;
+  --muted-foreground: #a7aec4;
+
+  --border: #252b45;
+
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      circle at 50% -10%,
+      rgba(108, 99, 255, 0.16),
+      transparent 38%
+    ),
+    var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(108, 99, 255, 0.35);
+}
+
+.glow {
+  box-shadow:
+    0 0 40px rgba(85, 70, 232, 0.12);
+}
+
+.gradient-text {
+  background: linear-gradient(
+    90deg,
+    #6c63ff,
+    #9b8cff,
+    #b878a8
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
