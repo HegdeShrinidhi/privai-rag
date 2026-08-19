@@ -1,13 +1,15 @@
-from uuid import uuid4
+import os
+import uuid
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
-    Filter,
-    FieldCondition,
-    MatchValue,
 )
 
 
@@ -15,17 +17,16 @@ class VectorStore:
     """
     Qdrant vector database service.
 
-    Responsibilities:
+    Supports:
 
-    - Create collections
-    - Store document chunks
-    - Store user ownership
-    - Search vectors
-    - Filter by user_id
-    - Filter by document_id
-    - Retrieve all indexed points
-    - Check whether a document exists
-    - Delete a document
+    - Local Docker Qdrant for development
+    - Qdrant Cloud for production
+    - User-level document isolation
+    - Document-level filtering
+    - Vector search
+    - Document discovery
+    - Document existence checks
+    - Document deletion
     """
 
     def __init__(
@@ -33,11 +34,97 @@ class VectorStore:
         host: str = "localhost",
         port: int = 6333,
     ):
-        self.client = QdrantClient(
-            host=host,
-            port=port,
-            timeout=60,
-        )
+        # =====================================================
+        # Qdrant configuration
+        # =====================================================
+
+        qdrant_url = os.getenv("QDRANT_URL")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
+        # =====================================================
+        # Qdrant Cloud
+        # =====================================================
+
+        if qdrant_url:
+
+            print(
+                "Connecting to Qdrant Cloud..."
+            )
+
+            self.client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                timeout=60,
+            )
+
+            print(
+                "Qdrant Cloud client initialized."
+            )
+
+        # =====================================================
+        # Local Docker Qdrant
+        # =====================================================
+
+        else:
+
+            print(
+                f"Connecting to local Qdrant "
+                f"at {host}:{port}..."
+            )
+
+            self.client = QdrantClient(
+                host=host,
+                port=port,
+                timeout=60,
+            )
+
+            print(
+                "Local Qdrant client initialized."
+            )
+
+    # =========================================================
+    # Create Payload Indexes
+    # =========================================================
+
+    def create_payload_indexes(
+        self,
+        collection_name: str,
+    ):
+        """
+        Create payload indexes required for filtering.
+
+        Required indexes:
+
+        - user_id
+        - document_id
+        """
+
+        indexes = [
+            ("user_id", "user_id"),
+            ("document_id", "document_id"),
+        ]
+
+        for field_name, label in indexes:
+
+            try:
+
+                self.client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+
+                print(
+                    f"Payload index created: {label}"
+                )
+
+            except Exception as exc:
+
+                # Qdrant returns an error if the index
+                # already exists. That is safe to ignore.
+                print(
+                    f"{label} index check: {exc}"
+                )
 
     # =========================================================
     # Collection
@@ -49,7 +136,10 @@ class VectorStore:
         vector_size: int,
     ):
         """
-        Create Qdrant collection if it does not already exist.
+        Create the collection if it does not exist.
+
+        If the collection already exists, make sure the
+        required payload indexes are present.
         """
 
         collections = self.client.get_collections()
@@ -59,27 +149,35 @@ class VectorStore:
             for collection in collections.collections
         ]
 
-        if collection_name not in existing_collections:
-
-            self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=vector_size,
-                    distance=Distance.COSINE,
-                ),
-            )
-
-            print(
-                f"Created Qdrant collection: "
-                f"{collection_name}"
-            )
-
-        else:
+        if collection_name in existing_collections:
 
             print(
                 f"Collection already exists: "
                 f"{collection_name}"
             )
+
+            self.create_payload_indexes(
+                collection_name
+            )
+
+            return
+
+        self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=vector_size,
+                distance=Distance.COSINE,
+            ),
+        )
+
+        print(
+            f"Created Qdrant collection: "
+            f"{collection_name}"
+        )
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
     # =========================================================
     # Collection Exists
@@ -114,7 +212,10 @@ class VectorStore:
         """
         Store document chunks and embeddings.
 
-        Every chunk is associated with a user_id.
+        Qdrant point IDs must be UUIDs or unsigned integers.
+
+        The application's original chunk_id remains in
+        the payload.
         """
 
         if len(chunks) != len(embeddings):
@@ -125,10 +226,17 @@ class VectorStore:
             )
 
         if not user_id:
+
             raise ValueError(
                 "user_id is required when "
                 "storing document chunks."
             )
+
+        # Ensure indexes exist before storing data.
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
         points = []
 
@@ -137,41 +245,65 @@ class VectorStore:
             embeddings,
         ):
 
+            payload = {
+                "user_id": user_id,
+
+                "chunk_id": chunk[
+                    "chunk_id"
+                ],
+
+                "document_id": chunk[
+                    "document_id"
+                ],
+
+                "filename": chunk[
+                    "filename"
+                ],
+
+                "page_number": chunk[
+                    "page_number"
+                ],
+
+                "chunk_index": chunk[
+                    "chunk_index"
+                ],
+
+                "text": chunk[
+                    "text"
+                ],
+            }
+
+            # -------------------------------------------------
+            # Deterministic UUID
+            # -------------------------------------------------
+            #
+            # Same user + same chunk_id => same point ID.
+            #
+            # This makes repeated indexing idempotent.
+            #
+
+            point_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{user_id}:{chunk['chunk_id']}",
+                )
+            )
+
             point = PointStruct(
-                id=str(uuid4()),
-
+                id=point_id,
                 vector=embedding,
-
-                payload={
-                    "user_id": user_id,
-
-                    "chunk_id": chunk[
-                        "chunk_id"
-                    ],
-
-                    "document_id": chunk[
-                        "document_id"
-                    ],
-
-                    "filename": chunk[
-                        "filename"
-                    ],
-
-                    "page_number": chunk[
-                        "page_number"
-                    ],
-
-                    "chunk_index": chunk[
-                        "chunk_index"
-                    ],
-
-                    "text": chunk[
-                        "text"
-                    ],
-                },
+                payload=payload,
             )
 
             points.append(point)
+
+        if not points:
+
+            print(
+                "No points to store."
+            )
+
+            return
 
         self.client.upsert(
             collection_name=collection_name,
@@ -198,14 +330,17 @@ class VectorStore:
         """
         Perform semantic vector search.
 
-        Search can be restricted by:
+        Optional filters:
 
         - user_id
         - document_id
-
-        If document_id is supplied, user_id should also
-        be supplied to guarantee ownership isolation.
         """
+
+        # Make sure the collection has required indexes.
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
         conditions = []
 
@@ -239,15 +374,56 @@ class VectorStore:
                 must=conditions
             )
 
+        # =====================================================
+        # Qdrant Client 1.19+
+        #
+        # query_points() is the current API.
+        # =====================================================
+
         results = self.client.query_points(
             collection_name=collection_name,
             query=query_vector,
             query_filter=query_filter,
             limit=limit,
             with_payload=True,
+            with_vectors=False,
         )
 
-        return results.points
+        # =====================================================
+        # Defensive ownership verification
+        # =====================================================
+
+        secure_results = []
+
+        for point in results.points:
+
+            payload = (
+                point.payload or {}
+            )
+
+            if (
+                user_id is not None
+                and payload.get(
+                    "user_id"
+                ) != user_id
+            ):
+
+                continue
+
+            if (
+                document_id is not None
+                and payload.get(
+                    "document_id"
+                ) != document_id
+            ):
+
+                continue
+
+            secure_results.append(
+                point
+            )
+
+        return secure_results
 
     # =========================================================
     # Get All Points
@@ -259,11 +435,15 @@ class VectorStore:
         user_id: str | None = None,
     ) -> list:
         """
-        Retrieve points from Qdrant.
+        Retrieve all indexed points.
 
-        If user_id is provided, only that user's
-        chunks are returned.
+        If user_id is provided, only that user's chunks
+        are returned.
         """
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
         query_filter = None
 
@@ -297,7 +477,25 @@ class VectorStore:
                 )
             )
 
-            all_points.extend(points)
+            # Defensive ownership filtering.
+
+            for point in points:
+
+                payload = (
+                    point.payload or {}
+                )
+
+                if (
+                    user_id is not None
+                    and payload.get(
+                        "user_id"
+                    ) != user_id
+                ):
+                    continue
+
+                all_points.append(
+                    point
+                )
 
             if next_offset is None:
                 break
@@ -322,6 +520,10 @@ class VectorStore:
         If user_id is provided, the document must belong
         to that user.
         """
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
         conditions = [
             FieldCondition(
@@ -371,15 +573,18 @@ class VectorStore:
         Delete all chunks belonging to a document.
 
         The document must belong to the specified user.
-
-        Returns the number of deleted chunks.
         """
 
         if not user_id:
+
             raise ValueError(
                 "user_id is required when "
                 "deleting a document."
             )
+
+        self.create_payload_indexes(
+            collection_name
+        )
 
         query_filter = Filter(
             must=[
@@ -398,30 +603,50 @@ class VectorStore:
             ]
         )
 
-        points, _ = self.client.scroll(
-            collection_name=collection_name,
-            scroll_filter=query_filter,
-            limit=10000,
-            with_payload=False,
-            with_vectors=False,
-        )
+        all_point_ids = []
 
-        if not points:
+        offset = None
+
+        while True:
+
+            points, next_offset = (
+                self.client.scroll(
+                    collection_name=collection_name,
+                    limit=100,
+                    offset=offset,
+                    scroll_filter=query_filter,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+            )
+
+            all_point_ids.extend(
+                point.id
+                for point in points
+            )
+
+            if next_offset is None:
+                break
+
+            offset = next_offset
+
+        if not all_point_ids:
+
+            print(
+                f"No chunks found for document "
+                f"{document_id}."
+            )
+
             return 0
-
-        point_ids = [
-            point.id
-            for point in points
-        ]
 
         self.client.delete(
             collection_name=collection_name,
-            points_selector=point_ids,
+            points_selector=all_point_ids,
         )
 
         print(
-            f"Deleted {len(point_ids)} chunks "
+            f"Deleted {len(all_point_ids)} chunks "
             f"for document {document_id}."
         )
 
-        return len(point_ids)
+        return len(all_point_ids)

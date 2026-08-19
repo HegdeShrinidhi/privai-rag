@@ -5,6 +5,8 @@ import {
   useState,
 } from "react";
 
+import { useSession } from "next-auth/react";
+
 import {
   getDocuments,
   getDocumentStatus,
@@ -12,93 +14,85 @@ import {
   deleteDocument,
   Document,
 } from "@/lib/api";
+
 import LogoutButton from "@/components/LogoutButton";
 
 export default function Home() {
+  // ==========================================================
+  // Logged-in user
+  // ==========================================================
 
-  const [
-    documents,
-    setDocuments,
-  ] = useState<Document[]>([]);
+  const { data: session } = useSession();
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
+  const userName =
+    session?.user?.name || "User";
 
-  const [
-    uploading,
-    setUploading,
-  ] = useState(false);
+  const userEmail =
+    session?.user?.email || "";
 
-  const [
-    deletingId,
-    setDeletingId,
-  ] = useState<string | null>(null);
+  const userInitial =
+    userName.charAt(0).toUpperCase();
 
-  const [
-    uploadMessage,
-    setUploadMessage,
-  ] = useState("");
+  // ==========================================================
+  // State
+  // ==========================================================
 
-  const [
-    error,
-    setError,
-  ] = useState("");
+  const [documents, setDocuments] =
+    useState<Document[]>([]);
 
+  const [loading, setLoading] =
+    useState(true);
+
+  const [uploading, setUploading] =
+    useState(false);
+
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null);
+
+  const [uploadMessage, setUploadMessage] =
+    useState("");
+
+  const [error, setError] =
+    useState("");
 
   // ==========================================================
   // Load documents
   // ==========================================================
 
   async function loadDocuments() {
-
     try {
-
       setLoading(true);
-
       setError("");
 
-      const data =
-        await getDocuments();
+      const data = await getDocuments();
 
       setDocuments(data);
-
     } catch (err) {
-
       setError(
         err instanceof Error
           ? err.message
           : "Failed to load documents."
       );
-
     } finally {
-
       setLoading(false);
-
     }
   }
-
 
   // ==========================================================
   // Initial load
   // ==========================================================
 
   useEffect(() => {
-
     loadDocuments();
-
   }, []);
 
-
   // ==========================================================
-  // Upload
+  // Upload document
   // ==========================================================
 
   async function handleUpload(
     event: React.ChangeEvent<HTMLInputElement>
   ) {
-
     const file =
       event.target.files?.[0];
 
@@ -106,16 +100,7 @@ export default function Home() {
       return;
     }
 
-
-    // --------------------------------------------------------
-    // Validate file
-    // --------------------------------------------------------
-
-    if (
-      file.type !==
-      "application/pdf"
-    ) {
-
+    if (file.type !== "application/pdf") {
       setError(
         "Only PDF files are supported."
       );
@@ -125,179 +110,115 @@ export default function Home() {
       return;
     }
 
-
     try {
-
       setUploading(true);
-
       setError("");
 
       setUploadMessage(
         "Uploading document..."
       );
 
-
-      // ------------------------------------------------------
-      // Upload
-      // ------------------------------------------------------
-
       const result =
         await uploadDocument(file);
 
-
       const documentId =
         result.document_id;
-
 
       setUploadMessage(
         "Document uploaded. Indexing started..."
       );
 
-
       // ------------------------------------------------------
-      // Poll processing status
+      // Poll document processing status
       // ------------------------------------------------------
 
       let completed = false;
-
       let attempts = 0;
 
       const maxAttempts = 120;
-
 
       while (
         !completed &&
         attempts < maxAttempts
       ) {
-
         attempts++;
 
         await new Promise(
           (resolve) =>
-            setTimeout(
-              resolve,
-              2000
-            )
+            setTimeout(resolve, 2000)
         );
-
 
         const status =
           await getDocumentStatus(
             documentId
           );
 
-
-        // ----------------------------------------------------
-        // Processing
-        // ----------------------------------------------------
-
         if (
           status.status ===
           "processing"
         ) {
-
           setUploadMessage(
             "Processing document..."
           );
-
         }
-
-
-        // ----------------------------------------------------
-        // Completed
-        // ----------------------------------------------------
 
         if (
           status.status ===
           "completed"
         ) {
-
           completed = true;
 
           setUploadMessage(
             "Document indexed successfully."
           );
 
-
-          // Refresh document library
-
           await loadDocuments();
 
           break;
-
         }
-
-
-        // ----------------------------------------------------
-        // Failed
-        // ----------------------------------------------------
 
         if (
           status.status ===
           "failed"
         ) {
-
           throw new Error(
             status.error ||
               "Document processing failed."
           );
-
         }
-
       }
 
-
       if (!completed) {
-
         throw new Error(
           "Document processing is taking longer than expected."
         );
-
       }
 
-
-      // ------------------------------------------------------
-      // Clear success message
-      // ------------------------------------------------------
-
       setTimeout(() => {
-
         setUploadMessage("");
-
       }, 3000);
 
-
     } catch (err) {
-
       setError(
         err instanceof Error
           ? err.message
           : "Upload failed."
       );
-
     } finally {
-
       setUploading(false);
 
       event.target.value = "";
-
     }
   }
 
-
   // ==========================================================
-  // Delete Document
+  // Delete document
   // ==========================================================
 
   async function handleDelete(
     documentId: string,
     filename: string
   ) {
-
-    // --------------------------------------------------------
-    // Confirmation
-    // --------------------------------------------------------
-
     const confirmed =
       window.confirm(
         `Delete "${filename}"?\n\n` +
@@ -309,28 +230,13 @@ export default function Home() {
       return;
     }
 
-
     try {
-
-      setDeletingId(
-        documentId
-      );
-
+      setDeletingId(documentId);
       setError("");
-
-
-      // ------------------------------------------------------
-      // Delete from backend
-      // ------------------------------------------------------
 
       await deleteDocument(
         documentId
       );
-
-
-      // ------------------------------------------------------
-      // Remove immediately from UI
-      // ------------------------------------------------------
 
       setDocuments(
         (previous) =>
@@ -341,106 +247,101 @@ export default function Home() {
           )
       );
 
-
-      // ------------------------------------------------------
-      // Success message
-      // ------------------------------------------------------
-
       setUploadMessage(
         `"${filename}" deleted successfully.`
       );
 
-
       setTimeout(() => {
-
         setUploadMessage("");
-
       }, 3000);
 
-
     } catch (err) {
-
       setError(
         err instanceof Error
           ? err.message
           : "Failed to delete document."
       );
-
     } finally {
-
       setDeletingId(null);
-
     }
   }
-
 
   // ==========================================================
   // UI
   // ==========================================================
 
   return (
-
     <main className="min-h-screen bg-[#080C1C] text-[#F5F7FF]">
 
+      {/* ==================================================== */}
+      {/* Header */}
+      {/* ==================================================== */}
 
-{/* ==================================================== */}
-{/* Header */}
-{/* ==================================================== */}
+      <header className="border-b border-[#252B45] bg-[#080C1C]/90 backdrop-blur-xl">
 
-<header className="border-b border-[#252B45] bg-[#080C1C]/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
 
-  <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
+          {/* Logo */}
 
-    {/* Logo */}
+          <div className="flex items-center gap-3">
 
-    <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#5546E8] shadow-lg shadow-[#5546E8]/20">
+              ✦
+            </div>
 
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#5546E8] shadow-lg shadow-[#5546E8]/20">
-        ✦
-      </div>
+            <div>
+              <h1 className="text-lg font-semibold">
+                PrivAI-RAG
+              </h1>
 
-      <div>
+              <p className="text-xs text-[#69728D]">
+                Enterprise Document Intelligence
+              </p>
+            </div>
 
-        <h1 className="text-lg font-semibold">
-          PrivAI-RAG
-        </h1>
+          </div>
 
-        <p className="text-xs text-[#69728D]">
-          Enterprise Document Intelligence
-        </p>
+          {/* Right side */}
 
-      </div>
+          <div className="flex items-center gap-4">
 
-    </div>
+            {/* Logged-in user */}
 
+            <div className="hidden items-center gap-3 sm:flex">
 
-    {/* Right Side */}
+              {/* Avatar */}
 
-    <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#5546E8] text-sm font-semibold text-white shadow-lg shadow-[#5546E8]/20">
 
-      {/* System Status */}
+                {userInitial}
 
-      <div className="flex items-center gap-2 rounded-full border border-[#252B45] bg-[#11172D] px-4 py-2">
+              </div>
 
-        <span className="h-2 w-2 rounded-full bg-[#22C55E] shadow-[0_0_10px_#22C55E]" />
+              {/* User information */}
 
-        <span className="text-sm text-[#A7AEC4]">
-          System Ready
-        </span>
+              <div className="leading-tight">
 
-      </div>
+                <p className="max-w-[180px] truncate text-sm font-medium text-[#F5F7FF]">
+                  {userName}
+                </p>
 
+                <p className="max-w-[220px] truncate text-xs text-[#69728D]">
+                  {userEmail}
+                </p>
 
-      {/* Logout */}
+              </div>
 
-      <LogoutButton />
+            </div>
 
-    </div>
+            {/* Logout */}
 
-  </div>
+            <LogoutButton />
 
-</header>
+          </div>
 
+        </div>
+
+      </header>
 
       {/* ==================================================== */}
       {/* Hero */}
@@ -450,10 +351,31 @@ export default function Home() {
 
         <div className="pointer-events-none absolute left-1/2 top-0 h-[500px] w-[700px] -translate-x-1/2 rounded-full bg-[#5546E8]/10 blur-[120px]" />
 
-
         <div className="relative mx-auto max-w-7xl px-6 pb-16 pt-20">
 
-          <div className="max-w-3xl">
+          <div className="max-w-4xl">
+
+            {/* Welcome message */}
+
+            <div className="mb-6 flex items-center gap-3">
+
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#5546E8]/20 text-sm font-semibold text-[#8B87FF]">
+                {userInitial}
+              </div>
+
+              <p className="text-sm text-[#A7AEC4]">
+
+                Welcome back,{" "}
+
+                <span className="font-semibold text-[#F5F7FF]">
+                  {userName}
+                </span>
+
+              </p>
+
+            </div>
+
+            {/* Badge */}
 
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#5546E8]/30 bg-[#5546E8]/10 px-4 py-2 text-xs font-medium text-[#8B87FF]">
 
@@ -461,6 +383,7 @@ export default function Home() {
 
             </div>
 
+            {/* Heading */}
 
             <h2 className="text-5xl font-bold leading-[1.05] tracking-tight md:text-6xl">
 
@@ -474,7 +397,6 @@ export default function Home() {
 
             </h2>
 
-
             <p className="mt-6 max-w-2xl text-lg leading-8 text-[#A7AEC4]">
 
               Upload enterprise documents and ask
@@ -483,8 +405,7 @@ export default function Home() {
 
             </p>
 
-
-            {/* Upload */}
+            {/* Buttons */}
 
             <div className="mt-8 flex flex-wrap gap-4">
 
@@ -501,9 +422,11 @@ export default function Home() {
                   shadow-[#5546E8]/20
                   transition
                   hover:bg-[#6C63FF]
-                  ${uploading
-                    ? "pointer-events-none opacity-60"
-                    : ""}
+                  ${
+                    uploading
+                      ? "pointer-events-none opacity-60"
+                      : ""
+                  }
                 `}
               >
 
@@ -523,34 +446,26 @@ export default function Home() {
 
               </label>
 
-
               <button
                 onClick={() => {
-
                   document
                     .getElementById(
                       "documents"
                     )
                     ?.scrollIntoView({
-                      behavior:
-                        "smooth",
+                      behavior: "smooth",
                     });
-
                 }}
                 className="rounded-xl border border-[#252B45] bg-[#11172D] px-6 py-3.5 font-medium transition hover:border-[#5546E8]/60"
               >
-
                 Explore Documents →
-
               </button>
 
             </div>
 
-
             {/* Upload status */}
 
             {uploadMessage && (
-
               <div className="mt-5 flex items-center gap-3 text-sm text-[#A7AEC4]">
 
                 <span className="h-2 w-2 animate-pulse rounded-full bg-[#6C63FF]" />
@@ -558,20 +473,16 @@ export default function Home() {
                 {uploadMessage}
 
               </div>
-
             )}
-
 
             {/* Error */}
 
             {error && (
-
               <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
 
                 {error}
 
               </div>
-
             )}
 
           </div>
@@ -579,7 +490,6 @@ export default function Home() {
         </div>
 
       </section>
-
 
       {/* ==================================================== */}
       {/* Documents */}
@@ -591,6 +501,8 @@ export default function Home() {
       >
 
         <div className="mx-auto max-w-7xl px-6 py-16">
+
+          {/* Section heading */}
 
           <div className="mb-8 flex items-end justify-between">
 
@@ -611,11 +523,8 @@ export default function Home() {
 
             </div>
 
-
             <button
-              onClick={
-                loadDocuments
-              }
+              onClick={loadDocuments}
               disabled={
                 loading ||
                 deletingId !== null
@@ -631,11 +540,9 @@ export default function Home() {
 
           </div>
 
-
           {/* Loading */}
 
           {loading && (
-
             <div className="rounded-2xl border border-[#252B45] bg-[#11172D] p-12 text-center">
 
               <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-[#252B45] border-t-[#6C63FF]" />
@@ -645,16 +552,13 @@ export default function Home() {
               </p>
 
             </div>
-
           )}
-
 
           {/* Error */}
 
           {!loading &&
             error &&
             documents.length === 0 && (
-
               <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-8 text-center">
 
                 <p className="text-red-400">
@@ -662,16 +566,13 @@ export default function Home() {
                 </p>
 
               </div>
-
             )}
-
 
           {/* Empty */}
 
           {!loading &&
             documents.length === 0 &&
             !error && (
-
               <div className="rounded-2xl border border-dashed border-[#252B45] bg-[#11172D]/50 p-16 text-center">
 
                 <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#5546E8]/10 text-2xl">
@@ -688,11 +589,9 @@ export default function Home() {
                 </p>
 
               </div>
-
             )}
 
-
-          {/* Document Cards */}
+          {/* Document cards */}
 
           {!loading &&
             documents.length > 0 && (
@@ -707,7 +606,6 @@ export default function Home() {
                       document.document_id;
 
                     return (
-
                       <div
                         key={
                           document.document_id
@@ -733,14 +631,13 @@ export default function Home() {
                         `}
                       >
 
-                        {/* Card Header */}
+                        {/* Card header */}
 
                         <div className="flex items-start justify-between">
 
                           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#5546E8]/10 text-xl">
                             📄
                           </div>
-
 
                           <span className="flex items-center gap-2 rounded-full bg-[#22C55E]/10 px-3 py-1 text-xs text-[#4ade80]">
 
@@ -751,7 +648,6 @@ export default function Home() {
                           </span>
 
                         </div>
-
 
                         {/* Filename */}
 
@@ -764,25 +660,19 @@ export default function Home() {
                           {document.filename}
                         </h4>
 
-
                         {/* Metadata */}
 
                         <div className="mt-3 flex gap-4 text-sm text-[#69728D]">
 
                           <span>
-                            {document.page_count}
-                            {" "}
-                            pages
+                            {document.page_count} pages
                           </span>
 
                           <span>
-                            {document.chunk_count}
-                            {" "}
-                            chunks
+                            {document.chunk_count} chunks
                           </span>
 
                         </div>
-
 
                         {/* Actions */}
 
@@ -797,15 +687,9 @@ export default function Home() {
                                 : `/chat/${document.document_id}`
                             }
                             onClick={(event) => {
-
-                              if (
-                                isDeleting
-                              ) {
-
+                              if (isDeleting) {
                                 event.preventDefault();
-
                               }
-
                             }}
                             className={`
                               flex-1
@@ -826,11 +710,8 @@ export default function Home() {
                               }
                             `}
                           >
-
                             Chat with document →
-
                           </a>
-
 
                           {/* Delete */}
 
@@ -889,19 +770,16 @@ export default function Home() {
                         </div>
 
                       </div>
-
                     );
                   }
                 )}
 
               </div>
-
             )}
 
         </div>
 
       </section>
-
 
       {/* ==================================================== */}
       {/* Footer */}

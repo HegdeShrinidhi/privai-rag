@@ -1,6 +1,9 @@
 import shutil
 import uuid
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import (
     BackgroundTasks,
